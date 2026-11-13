@@ -13,9 +13,12 @@ on:
 jobs:
   build:
     name: Build iOS (release_arm64)
-    runs-on: macos-26          # или xcode-27 (если доступен в твоём плане)
+    runs-on: xcode-27          # Лучший вариант для Xcode 27.x
+    # Альтернативы если xcode-27 недоступен:
+    # runs-on: macos-latest
+    # runs-on: macos-15
 
-    timeout-minutes: 360       # Telegram-iOS собирается долго
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
@@ -27,30 +30,32 @@ jobs:
       - name: Select Xcode 27.1
         run: |
           set -e
-          echo "Available Xcodes:"
+          echo "=== Available Xcodes ==="
           ls /Applications | grep -i xcode || true
+          echo ""
 
-          # Пытаемся найти Xcode 27.1
           if [ -d "/Applications/Xcode_27.1.app" ]; then
             sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
           elif [ -d "/Applications/Xcode_27.1_Release_Candidate.app" ]; then
             sudo xcode-select -s /Applications/Xcode_27.1_Release_Candidate.app/Contents/Developer
           elif [ -d "/Applications/Xcode_27.app" ]; then
             sudo xcode-select -s /Applications/Xcode_27.app/Contents/Developer
+          elif [ -d "/Applications/Xcode.app" ]; then
+            sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           else
-            echo "Xcode 27.x not found, using default"
-            xcode-select -p
+            echo "WARNING: Preferred Xcode not found, using current"
           fi
 
-          echo "Active Xcode:"
+          echo "=== Active Xcode ==="
           xcodebuild -version
           xcode-select -p
+          echo "=== macOS ==="
+          sw_vers
 
       - name: Create canonical source directory
         run: |
           set -x
           sudo mkdir -p /Users/Shared
-          # Копируем в стабильный путь (нужно для воспроизводимых бинарников)
           sudo rm -rf /Users/Shared/telegram-ios
           sudo cp -R "$GITHUB_WORKSPACE" /Users/Shared/telegram-ios
           sudo chown -R $(whoami) /Users/Shared/telegram-ios
@@ -80,7 +85,11 @@ jobs:
           echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
 
-          echo "Building Novagram / Telegram iOS $APP_VERSION ($BUILD_NUMBER)"
+          echo "========================================="
+          echo "Building Novagram / Telegram iOS"
+          echo "Version : $APP_VERSION"
+          echo "Build   : $BUILD_NUMBER"
+          echo "========================================="
 
           # Импорт фейковых сертификатов (unsigned build)
           python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
@@ -100,26 +109,30 @@ jobs:
           rm -rf "$OUTPUT_PATH"
           mkdir -p "$OUTPUT_PATH"
 
-          # IPA
-          find bazel-out -name "Telegram.ipa" -path "*/bin/Telegram/*" 2>/dev/null | head -1 | while read f; do
-            echo "Found IPA: $f"
-            cp "$f" "$OUTPUT_PATH/Telegram.ipa"
-          done
+          # Ищем IPA
+          IPA_FOUND=$(find bazel-out -name "Telegram.ipa" -path "*/bin/Telegram/*" 2>/dev/null | head -1 || true)
+          if [ -n "$IPA_FOUND" ]; then
+            echo "Found IPA: $IPA_FOUND"
+            cp "$IPA_FOUND" "$OUTPUT_PATH/Telegram.ipa"
+          else
+            echo "WARNING: Telegram.ipa not found!"
+            find bazel-out -name "*.ipa" 2>/dev/null || true
+          fi
 
           # dSYMs
           mkdir -p build/DSYMs
-          find bazel-out -name "*.dSYM" -path "*/bin/Telegram/*" 2>/dev/null | while read f; do
+          find bazel-out -name "*.dSYM" -path "*/bin/Telegram/*" 2>/dev/null | while read -r f; do
             cp -R "$f" build/DSYMs/ || true
           done
 
-          if [ -d "build/DSYMs" ] && [ "$(ls -A build/DSYMs)" ]; then
+          if [ -d "build/DSYMs" ] && [ "$(ls -A build/DSYMs 2>/dev/null)" ]; then
             zip -r "$OUTPUT_PATH/Telegram.DSYMs.zip" build/DSYMs
           fi
 
           echo "=== Artifacts ==="
           ls -lh "$OUTPUT_PATH" || true
 
-      - name: Upload IPA
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Telegram-iOS-${{ env.APP_VERSION }}-${{ env.BUILD_NUMBER }}
@@ -129,18 +142,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Create GitHub Release (only on tags or manual)
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.BUILD_NUMBER }}
-          name: Novagram / Telegram ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
+          name: Novagram ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
           body: |
             Unsigned build of Novagram (Telegram-iOS fork)
-            - Version: ${{ env.APP_VERSION }}
-            - Build: ${{ env.BUILD_NUMBER }}
-            - Configuration: release_arm64
-            - Codesigning: fake (development/unsigned)
+            - Version: `${{ env.APP_VERSION }}`
+            - Build: `${{ env.BUILD_NUMBER }}`
+            - Configuration: `release_arm64`
+            - Codesigning: fake (unsigned)
           files: |
             /Users/Shared/telegram-ios/build/artifacts/Telegram.ipa
             /Users/Shared/telegram-ios/build/artifacts/Telegram.DSYMs.zip
