@@ -5,6 +5,8 @@
 	"team_id": "XS5RA9S888",
 	"is_internal_build": "true",
 	"is_appstore_build": "false",
+	"appstore_id": 123456789,
+	  "premium_iap_product_id": "org.bytroxed.Telegram.premium",
 	"app_specific_url_scheme": "tg",
 	"enable_siri": false,
 	"enable_icloud": false
